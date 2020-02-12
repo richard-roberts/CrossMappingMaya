@@ -1,13 +1,13 @@
-import numpy as np
+import numpy
 
 class Kernels:
     
     @staticmethod
     def gaussian(a, b, sigma): 
-        dist = np.linalg.norm(b - a)
+        dist = numpy.linalg.norm(b - a)
         numer = -dist ** 2
         denom = 2 * (sigma ** 2)
-        return np.exp(numer / denom)
+        return numpy.exp(numer / denom)
 
 
 class ScatteredDataInterpolation:
@@ -19,13 +19,13 @@ class ScatteredDataInterpolation:
 
         # Build matrix containing kernel applied to combinations of values
         n = len(source_poses)
-        A = np.matrix(np.zeros((n, n)))
+        A = numpy.matrix(numpy.zeros((n, n)))
         for (i, pose_i) in enumerate(source_poses):
             for (j, pose_j) in enumerate(source_poses):
                 A[i, j] = kernel(pose_i, pose_j, sigma)
         
         # Build matrix containing target values
-        b = np.vstack([t.tolist() for t in target_poses])
+        b = numpy.vstack([t.tolist() for t in target_poses])
 
         # Solve for weights
         self.weights = (A.T * A).I * A.T * b
@@ -35,7 +35,7 @@ class ScatteredDataInterpolation:
             self.kernel(current_source_pose, source_pose, self.sigma)
             for source_pose in self.source_poses
         ]
-        result = np.array(values) * self.weights
+        result = numpy.array(values) * self.weights
         return result.tolist()[0]
 
 
@@ -52,7 +52,7 @@ class PoseTracker:
         raise NotImplementedError("set_attribute not implemented")
 
     def current_pose(self):
-        p = np.array([
+        p = numpy.array([
             self.read_attribute(attr_index)
             for attr_index in self.attribute_indices
         ])
@@ -63,15 +63,15 @@ class PoseTracker:
         for (index, value) in zip(self.attribute_indices, values):
             self.set_attribute(index, value)
 
-    def save_pose(self, name, pose):
-        print("Adding pose", name, pose)
+    def save_pose(self, name, pose, verbose=False):
+        if verbose: print("Adding pose", name, pose)
         self.poses[name] = pose
 
     def save_current_pose(self, name):
         self.save_pose(name, self.current_pose())
 
     def as_matrix(self):
-        return [self.poses.values()]
+        return numpy.matrix(list(self.poses.values()))
 
 
 class CrossMapping:
@@ -88,7 +88,7 @@ class CrossMapping:
 
     def save_predefined_pose(self, name, source, target):
         self.source.save_pose(name, source)
-        self.source.save_pose(name, target)
+        self.target.save_pose(name, target)
 
     def solve(self):
         self.interpolator = ScatteredDataInterpolation(
@@ -98,15 +98,18 @@ class CrossMapping:
             self.sigma
         )
 
-    def apply(self):
-        values = self.interpolator.interpolate(
-            self.source.current_pose().values
-        )
+    def apply(self, pose):        
+        return self.interpolator.interpolate(pose)
+        
+        
+    def apply_current(self):
+        values = self.apply(self.source.current_pose().values)
         self.target.set_current_pose(values)
 
 if __name__ == "__main__":
     cm = CrossMapping(["x"], ["x", "y"], 1.0)
-    cm.save_predefined_pose("P1", np.array([0.0]), np.array([0.0, 0.0]))
-    cm.save_predefined_pose("P2", np.array([1.0]), np.array([1.0, -0.5]))
+    cm.save_predefined_pose("P1", numpy.array([0.0]), numpy.array([0.0, 0.0]))
+    cm.save_predefined_pose("P2", numpy.array([1.0]), numpy.array([1.0, -0.5]))
     cm.solve()
-    cm.apply()
+    values = cm.apply(numpy.array([0.5]))
+    print(values)
