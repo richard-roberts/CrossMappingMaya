@@ -1,5 +1,6 @@
 import numpy
 
+
 class Kernels:
     
     @staticmethod
@@ -12,28 +13,29 @@ class Kernels:
 
 class ScatteredDataInterpolation:
 
-    def __init__(self, source_poses, target_poses, kernel, sigma):
-        self.source_poses = source_poses
+    def __init__(self, source, target, kernel, sigma):
+        self.source = [numpy.array(v) for v in source]
+        self.target = [numpy.array(v) for v in target]
         self.kernel = kernel
         self.sigma = sigma
 
         # Build matrix containing kernel applied to combinations of values
-        n = len(source_poses)
+        n = len(self.source)
         A = numpy.matrix(numpy.zeros((n, n)))
-        for (i, pose_i) in enumerate(source_poses):
-            for (j, pose_j) in enumerate(source_poses):
+        for (i, pose_i) in enumerate(self.source):
+            for (j, pose_j) in enumerate(self.source):
                 A[i, j] = kernel(pose_i, pose_j, sigma)
         
         # Build matrix containing target values
-        b = numpy.vstack([t.tolist() for t in target_poses])
+        b = numpy.vstack(self.target)
 
         # Solve for weights
         self.weights = (A.T * A).I * A.T * b
 
     def interpolate(self, current_source_pose):
         values = [
-            self.kernel(current_source_pose, source_pose, self.sigma)
-            for source_pose in self.source_poses
+            self.kernel(current_source_pose, s, self.sigma)
+            for s in self.source
         ]
         result = numpy.array(values) * self.weights
         return result.tolist()[0]
@@ -43,73 +45,75 @@ class PoseTracker:
 
     def __init__(self, attribute_indices):
         self.attribute_indices = attribute_indices
-        self.poses = {}
-
-    def read_attribute(self, index):
-        raise NotImplementedError("read_attribute not implemented")
-
-    def set_attribute(self, index, value):
-        raise NotImplementedError("set_attribute not implemented")
 
     def current_pose(self):
-        p = numpy.array([
-            self.read_attribute(attr_index)
-            for attr_index in self.attribute_indices
-        ])
-        return p
+        return [ai.read() for ai in self.attribute_indices]
 
     def set_current_pose(self, values):
-        print("Setting current pose to ", values) #TODO: remove print
         for (index, value) in zip(self.attribute_indices, values):
-            self.set_attribute(index, value)
-
-    def save_pose(self, name, pose, verbose=False):
-        if verbose: print("Adding pose", name, pose)
-        self.poses[name] = pose
-
-    def save_current_pose(self, name):
-        self.save_pose(name, self.current_pose())
-
-    def as_matrix(self):
-        return numpy.matrix(list(self.poses.values()))
-
+            index.set(value)
 
 class CrossMapping:
 
-    def __init__(self, source_attribute_indices, target_attribute_indices, sigma):
-        self.source = PoseTracker(source_attribute_indices)
-        self.target = PoseTracker(target_attribute_indices)
-        self.sigma = sigma
+    def __init__(self):
+        self.source = None
+        self.target = None
+        self.sigma = 1.0
         self.interpolator = None
-
-    def save_current_poses(self, name):
-        self.source.save_current_pose(name)
-        self.target.save_current_pose(name)
-
-    def save_predefined_pose(self, name, source, target):
-        self.source.save_pose(name, source)
-        self.target.save_pose(name, target)
+        self.snapshots = {}
+        
+    def init_source(self, attrs):
+        self.source = PoseTracker(attrs)
+        
+    def init_target(self, attrs):
+        self.target = PoseTracker(attrs)
+        
+    def is_initialized(self):
+        return self.source is not None and self.target is not None
+        
+    def new_snapshot(self, name):
+        self.snapshots[name] = {
+            "source": self.source.current_pose(),
+            "target": self.target.current_pose()
+        }
+        
+    def delete_snapshot(self, name):
+        del self.snapshots[name]
+    
+    def names_of_snapshots(self):
+        return list(self.snapshots.keys())
+        
+    def number_of_snapshots(self):
+        return len(self.snapshots.keys())
 
     def solve(self):
+        if not self.is_initialized():
+            raise ValueError("Source and target pose trackers not yet initialized")
+        
+        # Stack poses for each snapshot, ensuring to put them in the same order
+        source_data = []
+        target_data = []
+        for key in self.snapshots.keys():
+            source_data.append(self.snapshots[key]["source"])
+            target_data.append(self.snapshots[key]["target"])
+        
         self.interpolator = ScatteredDataInterpolation(
-            self.source.as_matrix(),
-            self.target.as_matrix(),
+            source_data,
+            target_data,
             Kernels.gaussian,
             self.sigma
         )
 
-    def apply(self, pose):        
-        return self.interpolator.interpolate(pose)
-        
+    def apply(self, pose):     
+        if self.interpolator is None:
+            raise ValueError("Interpolator has not been setup")
+        else:
+            return self.interpolator.interpolate(pose)
         
     def apply_current(self):
-        values = self.apply(self.source.current_pose().values)
-        self.target.set_current_pose(values)
+        if self.interpolator is None:
+            raise ValueError("Interpolator has not been setup")
+        else:
+            values = self.apply(self.source.current_pose())
+            self.target.set_current_pose(values)
 
-if __name__ == "__main__":
-    cm = CrossMapping(["x"], ["x", "y"], 1.0)
-    cm.save_predefined_pose("P1", numpy.array([0.0]), numpy.array([0.0, 0.0]))
-    cm.save_predefined_pose("P2", numpy.array([1.0]), numpy.array([1.0, -0.5]))
-    cm.solve()
-    values = cm.apply(numpy.array([0.5]))
-    print(values)
