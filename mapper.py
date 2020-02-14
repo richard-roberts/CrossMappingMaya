@@ -117,3 +117,7 @@ class CrossMapping:
             values = self.apply(self.source.current_pose())
             self.target.set_current_pose(values)
 
+    def try_apply_current(self):
+        if self.interpolator is not None:
+            values = self.apply(self.source.current_pose())
+            self.target.set_current_pose(values)

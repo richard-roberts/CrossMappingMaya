@@ -1,7 +1,6 @@
-import sys
-sys.path.append("F:/Development/CrossMappingMaya")
-
 import json
+
+import numpy
 
 from PySide2 import QtCore
 from PySide2 import QtWidgets
@@ -20,13 +19,15 @@ class AttributeSelector(altmaya.StandardMayaWindow):
     ROW_SIZE = 50
     
     def __init__(self, title, preselected_attr_indices=[], parent=None):
-        super(AttributeSelector, self).__init__(title)
+        super(AttributeSelector, self).__init__(title, parent=parent)
         
         selection_before = altmaya.Selection.get()
         altmaya.Selection.set([ai.obj for ai in preselected_attr_indices])
         
         self.object_list = []
         self.attribute_list = []
+        
+        self.banned = []
         
         self.create_widgets()
         self.create_layout()
@@ -53,6 +54,7 @@ class AttributeSelector(altmaya.StandardMayaWindow):
         else: item.setCheckState(QtCore.Qt.Unchecked)
         self.table_wdg.setItem(row, column, item)
         self.set_item_value(item, value)
+        return item
         
     def check_cells_corresponding_to_attrs(self, attr_indices):
         for ai in attr_indices:
@@ -88,10 +90,13 @@ class AttributeSelector(altmaya.StandardMayaWindow):
             r = self.table_wdg.rowCount()
             self.table_wdg.insertRow(r)
             self.insert_standard_item(r, 0, o, None)
-            for c, a in enumerate(self.attribute_list):
+            for ix, a in enumerate(self.attribute_list):
+                c = ix + 1
                 index = altmaya.AttributeIndex(o, a)
-                if index.exists():
-                    self.insert_checking_item(r, c + 1, False, index)
+                item = self.insert_checking_item(r, c, False, index)
+                if not index.exists():
+                    item.setFlags(QtCore.Qt.NoItemFlags)
+                    self.banned.append((r, c))
         
         self.check_cells_corresponding_to_attrs(currently_checked)
         
@@ -123,6 +128,8 @@ class AttributeSelector(altmaya.StandardMayaWindow):
         self.table_wdg.itemClicked.connect(self.toggle_item)
         
     def toggle_item(_, item):
+        if item.row() == 0:
+            return # avoid the 0 column which has names
         if item.checkState() == QtCore.Qt.Checked:
             item.setCheckState(QtCore.Qt.Unchecked)
         else:
@@ -142,7 +149,8 @@ class AttributeSelector(altmaya.StandardMayaWindow):
         new_state = QtCore.Qt.Checked if nTrue <= nFalse else QtCore.Qt.Unchecked
             
         for r in range(self.table_wdg.rowCount()):
-            self.table_wdg.item(r, c).setCheckState(new_state)
+            if (r, c) not in self.banned:
+                self.table_wdg.item(r, c).setCheckState(new_state)
             
     def read_values_as_indices(self):
         indices = []
@@ -158,14 +166,18 @@ class AttributeSelector(altmaya.StandardMayaWindow):
         
 class MappingEditorInterface(altmaya.StandardMayaWindow):
     
-    def __init__(self, mapper):
-        super(MappingEditorInterface, self).__init__("Mapping Editor")
+    def __init__(self, parent, mapper):
+        super(MappingEditorInterface, self).__init__("Mapping Editor", parent=parent)
         
         self.mapper = mapper
-        
-        self.input_selector = AttributeSelector("Input Attributes", preselected_attr_indices=mapper.source.attribute_indices)
-        self.output_selector = AttributeSelector("Output Attributes", preselected_attr_indices=mapper.target.attribute_indices)
-        
+
+        if self.mapper.is_initialized():
+            self.input_selector = AttributeSelector("Input Attributes", preselected_attr_indices=mapper.source.attribute_indices)
+            self.output_selector = AttributeSelector("Output Attributes", preselected_attr_indices=mapper.target.attribute_indices)
+        else:
+            self.input_selector = AttributeSelector("Input Attributes")
+            self.output_selector = AttributeSelector("Output Attributes")
+            
         self.snapshot_table_column_names = [
             "Name",
             "Log",
@@ -177,11 +189,13 @@ class MappingEditorInterface(altmaya.StandardMayaWindow):
         self.create_connections()
         
         self.update_table()
+        self.report_message("Ready and Waiting")
         
     def create_widgets(self):
         
+        self.status_bar = QtWidgets.QLabel("Status")
+        
         self.edit_sigma = QtWidgets.QDoubleSpinBox()
-        # self.edit_sigma.setRange(0.0, 1.0)
         self.edit_sigma.setSingleStep(0.01)
         self.edit_sigma.setValue(self.mapper.sigma)
         
@@ -222,6 +236,7 @@ class MappingEditorInterface(altmaya.StandardMayaWindow):
         
         # Main
         main_layout = QtWidgets.QVBoxLayout(self)
+        main_layout.addWidget(self.status_bar)
         main_layout.addLayout(layout_top)
         main_layout.addLayout(layout_table_main)
         main_layout.addLayout(layout_bot_buttons)
@@ -235,6 +250,23 @@ class MappingEditorInterface(altmaya.StandardMayaWindow):
         self.button_solve.clicked.connect(self.solve)
         self.button_apply.clicked.connect(self.apply)
         
+    def set_status(self, message, color_as_hex):
+        font_hex = "%02x%02x%02x" % (55, 55, 55)
+        self.status_bar.setText("> " + message)
+        self.status_bar.setStyleSheet("background: #%s; color: #%s" % (color_as_hex, font_hex))
+        
+    def report_error(self, message):
+        self.set_status(message, "F20505")
+        altmaya.Report.error("Mapping Editor: " + message)
+        
+    def report_warning(self, message):
+        self.set_status(message, "F2BE22")
+        altmaya.Report.warning("Mapping Editor: " + message)
+        
+    def report_message(self, message):
+        self.set_status(message, "446644")
+        altmaya.Report.message("Mapping Editor: " + message)
+        
     def open_from_selector(self):
         self.input_selector.show()
         
@@ -244,11 +276,20 @@ class MappingEditorInterface(altmaya.StandardMayaWindow):
     def init_trackers(self):
         if self.mapper.is_initialized():
             if not altmaya.Ask.decision(self, "Restart trackers", "Restart trackers and earse snapshot data?"):
-                altmaya.Report.warning("Cancelled command to restart trackers")
+                self.report_warning("Cancelled command to restart trackers")
                 return
-                
+        
+        if len(self.input_selector.read_values_as_indices()) == 0:
+            self.report_error("No input attributes are selected")
+            return
+            
+        if len(self.output_selector.read_values_as_indices()) == 0:
+            self.report_error("No output attributes are selected")
+            return
+            
         self.mapper.init_source(self.input_selector.read_values_as_indices())
         self.mapper.init_target(self.output_selector.read_values_as_indices())
+        self.report_message("Successfully initialized")
         
     def update_table(self):
         # Columns are:
@@ -260,20 +301,20 @@ class MappingEditorInterface(altmaya.StandardMayaWindow):
         self.table_snapshots.setRowCount(n)
         self.table_snapshots.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         
-        def add_label(text, col_name):
+        def add_label(text, ix, col_name):
             item = QtWidgets.QTableWidgetItem()
             item.setText(text)
             self.table_snapshots.setItem(ix, self.snapshot_table_column_names.index(col_name), item)
 
-        def add_button(text, callback, col_name):
+        def add_button(text, callback, ix, col_name):
             button = QtWidgets.QPushButton(text)
             button.clicked.connect(callback)
             self.table_snapshots.setCellWidget(ix, self.snapshot_table_column_names.index(col_name), button)
-        
+            
         for (ix, name) in enumerate(names):
 
             # Name
-            add_label(name, "Name")
+            add_label(name, ix, "Name")
             
             # Log
             def callback(ix, name):
@@ -284,47 +325,55 @@ class MappingEditorInterface(altmaya.StandardMayaWindow):
                     message += "\n\tTarget: %s" % str(snapshot["target"])
                     altmaya.Report.message(message)
                 return fn
-            add_button("Log", callback(ix, name), "Log")
+            add_button("Log", callback(ix, name), ix, "Log")
             
             # Delete
             def callback(ix, name):
                 def fn():
-                    altmaya.Report.message("Deleting snapshot %s" % name)
-                    self.mapper.delete_pose(name)
+                    self.report_message("Deleting snapshot %s" % name)
+                    self.mapper.delete_snapshot(name)
                     self.update_table()
                 return fn
-            add_button("Delete", callback(ix, name), "Delete")
+            add_button("Delete", callback(ix, name), ix, "Delete")
     
     def new_snapshot(self):
         if self.mapper.source is None:
-            altmaya.Report.error("Source pose is not setup yet")
+            self.report_error("Source pose is not setup yet")
             return
         if self.mapper.source is None:
-            altmaya.Report.error("Target pose is not setup yet")
+            self.report_error("Target pose is not setup yet")
             return
         n = self.mapper.number_of_snapshots()
         name = "Snapshot %d" % (n + 1)
         name = altmaya.Ask.string(self, "New Snapshot", "Enter name for snapshot", name)
         if name == "":
-            altmaya.Report.warning("Cancelled new snapshot command (user cancelled)")
+            self.report_warning("Cancelled new snapshot command (user cancelled)")
             return
         self.mapper.new_snapshot(name)
+        self.report_message("New snapshot created: %s" % name)
         self.update_table()
         
     def solve(self):
         try:
             self.mapper.sigma = self.edit_sigma.value()
             self.mapper.solve()
-            altmaya.Report.message("Solved mapper")
+            self.report_message("Solved mapper")
+        except numpy.linalg.LinAlgError as e:
+            self.report_error("Failed to solve: do you have two or more snapshots with the same input values?")
         except ValueError as e:
-            altmaya.Report.error(str(e))
+            self.report_error(str(e))
     
     def apply(self):
         try:
             self.mapper.apply_current()
-            altmaya.Report.message("Applied mapper")
+            self.report_message("Applied mapper")
         except ValueError as e:
-            altmaya.Report.error(str(e))
+            self.report_error(str(e))
+            
+    def closeEvent(self, event):
+        self.input_selector.close()
+        self.output_selector.close()
+        event.accept()
         
 
 class MappingCollectionInterface(altmaya.StandardMayaWindow):
@@ -338,19 +387,25 @@ class MappingCollectionInterface(altmaya.StandardMayaWindow):
             "Edit",
             "Solve",
             "Apply",
+            "Active",
             "Delete"
         ]
 
         self.mappers = {}
+        self.active_callbacks = {}
 
-        self.setGeometry(0, 0, 800, 400)
+        self.setGeometry(0, 0, 400, 400)
         self.create_widgets()
         self.create_layout()
         self.create_connections()
 
         self.update_table()
+        self.report_message("Ready and Waiting")
 
     def create_widgets(self):
+        
+        # Status 
+        self.status_bar = QtWidgets.QLabel("Status")
         
         # Top buttons
         self.button_export_mapping_data = QtWidgets.QPushButton("Export")
@@ -389,6 +444,7 @@ class MappingCollectionInterface(altmaya.StandardMayaWindow):
 
         # Main
         main_layout = QtWidgets.QVBoxLayout(self)
+        main_layout.addWidget(self.status_bar)
         main_layout.addLayout(layout_top_buttons)
         main_layout.addLayout(layout_table_main)
         main_layout.addLayout(layout_bot_buttons)
@@ -399,10 +455,31 @@ class MappingCollectionInterface(altmaya.StandardMayaWindow):
         
         self.button_new_mapping.clicked.connect(self.add_new_mapping)
         
+        self.button_solve_mappings.clicked.connect(self.solve_mappings)
+        self.button_apply_mappings.clicked.connect(self.apply_mappings)
+        self.button_bake_mappings.clicked.connect(self.bake_mappings)
+        
+    def set_status(self, message, color_as_hex):
+        font_hex = "%02x%02x%02x" % (55, 55, 55)
+        self.status_bar.setText("> " + message)
+        self.status_bar.setStyleSheet("background: #%s; color: #%s" % (color_as_hex, font_hex))
+    
+    def report_error(self, message):
+        self.set_status(message, "F20505")
+        altmaya.Report.error("Mapping Manager: " + message)
+        
+    def report_warning(self, message):
+        self.set_status(message, "F2BE22")
+        altmaya.Report.warning("Mapping Manager: " + message)
+        
+    def report_message(self, message):
+        self.set_status(message, "446644")
+        altmaya.Report.message("Mapping Manager: " + message)
+        
     def export_to_json(self):
         filepath = altmaya.Ask.choose_file_to_save_json(self, "Export Mappers to JSON")
         if filepath == "":
-            altmaya.Report.warning("Cancelled command to export mappers")
+            self.report_warning("Cancelled command to export mappers")
             return 
             
         data = []
@@ -421,13 +498,12 @@ class MappingCollectionInterface(altmaya.StandardMayaWindow):
         with open(filepath, "w") as f:
             f.write(json.dumps(data, indent=4, separators=(',', ': ')))
             
-        altmaya.Report.message("Exported mappers to %s" % filepath)
-
+        self.report_message("Exported mappers to %s" % filepath)
         
     def import_from_json(self):
         filepath = altmaya.Ask.choose_file_to_open_json(self, "Import Mappers from JSON")
         if filepath == "":
-            altmaya.Report.warning("Cancelled command to import mappers")
+            self.report_warning("Cancelled command to import mappers")
             return 
             
         with open(filepath, "r") as f:
@@ -441,12 +517,17 @@ class MappingCollectionInterface(altmaya.StandardMayaWindow):
             m.snapshots = datum["snapshots"]
             self.mappers[datum["name"]] = m
             
-        altmaya.Report.message("Imported mappers from %s" % filepath)
+        self.report_message("Imported mappers from %s" % filepath)
         self.update_table()
 
+    def read_sigma(self, ix):
+        slider = self.table_mappers.cellWidget(ix, self.mapper_table_column_names.index("Sigma"))
+        return slider.value()
+    
+        
     def update_table(self):
         # Columns are:
-        #     Name | Sigma | Edit | Solve | Apply | Delete
+        #     Name | Sigma | Edit | Solve | Apply | Active | Delete
 
         mappers = self.mappers
         keys = list(mappers.keys())
@@ -454,69 +535,100 @@ class MappingCollectionInterface(altmaya.StandardMayaWindow):
         self.table_mappers.setRowCount(len(keys))
         self.table_mappers.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         
-        def add_label(text, col_name):
+        def add_label(text, ix, col_name):
             item = QtWidgets.QTableWidgetItem()
             item.setText(text)
             self.table_mappers.setItem(ix, self.mapper_table_column_names.index(col_name), item)
             
-        def add_editable_number(init, col_name):
+        def add_editable_number(init, ix, col_name):
             item = QtWidgets.QDoubleSpinBox()
             # item.setRange(0.0, 1.0)
             item.setSingleStep(0.01)
             item.setValue(init)
             self.table_mappers.setCellWidget(ix, self.mapper_table_column_names.index(col_name), item)
 
-        def add_button(text, callback, col_name):
+        def add_button(text, callback, ix, col_name):
             button = QtWidgets.QPushButton(text)
             button.clicked.connect(callback)
             self.table_mappers.setCellWidget(ix, self.mapper_table_column_names.index(col_name), button)
-            
-        def read_sigma(ix):
-            slider = self.table_mappers.cellWidget(ix, self.mapper_table_column_names.index("Sigma"))
-            return slider.value()
+        
+        def add_tick_box(callback, ix, col_name):
+            tick = QtWidgets.QCheckBox()
+            tick.toggled.connect(callback)
+            self.table_mappers.setCellWidget(ix, self.mapper_table_column_names.index(col_name), tick)
         
         for (ix, key) in enumerate(keys):
             mapper = self.mappers[key]
 
             # Name
-            add_label(key, "Name")
+            add_label(key, ix, "Name")
 
             # Edit
             def callback(ix, key):
                 def fn():
-                    altmaya.Report.message("Editing %s" % key)
-                    MappingEditorInterface(self.mappers[key]).show()
+                    MappingEditorInterface(self, self.mappers[key]).show()
                 return fn
-            add_button("Edit", callback(ix, key), "Edit")
+            add_button("Edit", callback(ix, key), ix, "Edit")
                         
             # Solve
             def callback(ix, key):
                 def fn():
-                    altmaya.Report.message("Solving %s" % key)
-                    self.mappers[key].sigma = read_sigma(ix)
-                    self.mappers[key].solve()
+                    try:
+                        self.mappers[key].sigma = self.read_sigma(ix)
+                        self.mappers[key].solve()
+                        self.report_message("Solved %s" % key)
+                    except ValueError as e:
+                        self.report_error(str(e))
                 return fn
-            add_button("Solve", callback(ix, key), "Solve")
+            add_button("Solve", callback(ix, key), ix, "Solve")
             
             # Sigma
-            add_editable_number(mapper.sigma, "Sigma")
+            add_editable_number(mapper.sigma, ix, "Sigma")
 
             # Apply
             def callback(ix, key):
                 def fn():
-                    altmaya.Report.message("Applying %s" % key)
-                    self.mappers[key].apply_current()
+                    try:
+                        self.mappers[key].apply_current()
+                        self.report_message("Applied %s" % key)
+                    except ValueError as e:
+                        self.report_error(str(e))
                 return fn
-            add_button("Apply", callback(ix, key), "Apply")
+            add_button("Apply", callback(ix, key), ix, "Apply")
 
+            # Active
+            def callback(ix, key):
+                mapper = self.mappers[key]
+                
+                def make_attr_callback(mapper):
+                    def fn(*args):
+                        mapper.try_apply_current()
+                    return fn
+                        
+                def fn(checked):
+                    
+                    if checked:
+                        print("Adding callbacks")
+                        for ai in mapper.source.attribute_indices:
+                            if not altmaya.AttributeChangeCallback.is_already_registered(ai):
+                                attr_callback = make_attr_callback(mapper)
+                                altmaya.AttributeChangeCallback(ai,attr_callback)
+                    else:
+                        print("Stopping callbacks")
+                        for ai in mapper.source.attribute_indices:
+                            if altmaya.AttributeChangeCallback.is_already_registered(ai):
+                                altmaya.AttributeChangeCallback.kill_for_index(ai)
+                return fn
+            add_tick_box(callback(ix, key), ix, "Active")
+            
             # Delete
             def callback(ix, key):
                 def fn():
-                    altmaya.Report.message("Deleting %s" % key)
+                    self.report_message("Deleting %s" % key)
                     del self.mappers[key]
                     self.update_table()
                 return fn
-            add_button("Delete", callback(ix, key), "Delete")
+            add_button("Delete", callback(ix, key), ix, "Delete")
             
     def add_new_mapping(self):
         n = len(self.mappers.keys())
@@ -525,17 +637,60 @@ class MappingCollectionInterface(altmaya.StandardMayaWindow):
         if name != "":
             self.mappers[name] = mapper.CrossMapping()
             self.update_table()
+            self.report_message("Created new mapping: %s" % name)
         else:
-            altmaya.Report.warning("Cancelled command to make a new mapping (user cancelled)")
+            self.report_warning("Cancelled command to make a new mapping (user cancelled)")
+            
+    def solve_mappings(self):
+        c_name = self.mapper_table_column_names.index("Name")
+        c_sigma = self.mapper_table_column_names.index("Sigma")
         
+        n = self.table_mappers.rowCount()
+        for r in range(n):
+            name = self.table_mappers.item(r, c_name).text()
+            sigma = self.table_mappers.cellWidget(r, c_sigma).value()
+            mapper = self.mappers[name]
+            try:
+                mapper.sigma = sigma
+                mapper.solve()
+            except ValueError as e:
+                self.report_error("Failed to solve %s" % (name, str(e)))
+                return
+        self.report_message("Solved %d mappings" % n)
 
-if __name__ == "__main__":
+    def apply_mappings(self):
+        c_name = self.mapper_table_column_names.index("Name")        
+        n = self.table_mappers.rowCount()
+        for r in range(n):
+            name = self.table_mappers.item(r, c_name).text()
+            mapper = self.mappers[name]
+            try:
+                mapper.apply_current()
+            except ValueError as e:
+                self.report_error("Failed to apply %s" % (name, str(e)))
+                return
+        self.report_message("Applied %d mappings" % n)
+
+    def bake_mappings(self):
+        # TODO: implement this
+        self.report_error("Bake not implemented yet sorry!")
         
-    try:
-        test_dialog.close() # pylint: disable=E0601
-        test_dialog.deleteLater()
-    except:
-        pass
+    def closeEvent(self, event):
+        altmaya.AttributeChangeCallback.clear()
+        for c in test_dialog.children():
+            if type(c) == MappingEditorInterface:
+                c.close()
+        self.report_message("Enjoy your mapping!")
+        event.accept()
 
-    test_dialog = MappingCollectionInterface()
-    test_dialog.show()
+
+try:
+    test_dialog.close() # pylint: disable=E0601
+    test_dialog.deleteLater()
+except:
+    pass
+
+test_dialog = MappingCollectionInterface()
+test_dialog.show()
+
+
