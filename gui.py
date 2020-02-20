@@ -166,8 +166,8 @@ class AttributeSelector(altmaya.StandardMayaWindow):
         
 class MappingEditorInterface(altmaya.StandardMayaWindow):
     
-    def __init__(self, parent, mapper):
-        super(MappingEditorInterface, self).__init__("Mapping Editor", parent=parent)
+    def __init__(self, parent, mapper, name):
+        super(MappingEditorInterface, self).__init__("Mapping Editor - %s" % name, parent=parent)
         
         self.mapper = mapper
 
@@ -181,6 +181,7 @@ class MappingEditorInterface(altmaya.StandardMayaWindow):
         self.snapshot_table_column_names = [
             "Name",
             "Log",
+            "Go To",
             "Delete"
         ]
         
@@ -208,8 +209,10 @@ class MappingEditorInterface(altmaya.StandardMayaWindow):
         self.table_snapshots.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
         self.button_new_snapshot = QtWidgets.QPushButton("Snapshot")
         
+        self.button_zero = QtWidgets.QPushButton("Zero")
         self.button_solve = QtWidgets.QPushButton("Solve")
         self.button_apply = QtWidgets.QPushButton("Apply")
+        self.button_bake = QtWidgets.QPushButton("Bake")
         
     def create_layout(self):
         
@@ -231,8 +234,10 @@ class MappingEditorInterface(altmaya.StandardMayaWindow):
         layout_table_main.addLayout(table_layout_buttons)
         
         layout_bot_buttons = QtWidgets.QHBoxLayout()
+        layout_bot_buttons.addWidget(self.button_zero)
         layout_bot_buttons.addWidget(self.button_solve)
         layout_bot_buttons.addWidget(self.button_apply)
+        layout_bot_buttons.addWidget(self.button_bake)
         
         # Main
         main_layout = QtWidgets.QVBoxLayout(self)
@@ -247,8 +252,10 @@ class MappingEditorInterface(altmaya.StandardMayaWindow):
         self.button_init_trackers.clicked.connect(self.init_trackers)
         self.button_new_snapshot.clicked.connect(self.new_snapshot)
         
+        self.button_zero.clicked.connect(self.reset_target_to_zero)
         self.button_solve.clicked.connect(self.solve)
         self.button_apply.clicked.connect(self.apply)
+        self.button_bake.clicked.connect(self.bake)
         
     def set_status(self, message, color_as_hex):
         font_hex = "%02x%02x%02x" % (55, 55, 55)
@@ -293,7 +300,7 @@ class MappingEditorInterface(altmaya.StandardMayaWindow):
         
     def update_table(self):
         # Columns are:
-        #     Name | Log | Delete
+        #     Name | Log | Go To | Delete
         
         names = self.mapper.names_of_snapshots()
         n = self.mapper.number_of_snapshots()
@@ -327,6 +334,12 @@ class MappingEditorInterface(altmaya.StandardMayaWindow):
                 return fn
             add_button("Log", callback(ix, name), ix, "Log")
             
+            def callback(ix, name):
+                def fn():
+                    self.mapper.go_to_snapshot(name)
+                return fn
+            add_button("Go To", callback(ix, name), ix, "Go To")
+            
             # Delete
             def callback(ix, name):
                 def fn():
@@ -344,7 +357,8 @@ class MappingEditorInterface(altmaya.StandardMayaWindow):
             self.report_error("Target pose is not setup yet")
             return
         n = self.mapper.number_of_snapshots()
-        name = "Snapshot %d" % (n + 1)
+        # name = "Snapshot %d" % (n + 1)
+        name = "@%s" % int(altmaya.Timeline.get_current_frame())
         name = altmaya.Ask.string(self, "New Snapshot", "Enter name for snapshot", name)
         if name == "":
             self.report_warning("Cancelled new snapshot command (user cancelled)")
@@ -352,6 +366,10 @@ class MappingEditorInterface(altmaya.StandardMayaWindow):
         self.mapper.new_snapshot(name)
         self.report_message("New snapshot created: %s" % name)
         self.update_table()
+    
+    def reset_target_to_zero(self):
+        self.mapper.target.go_to_zero()
+        self.report_message("Reset target to zero")
         
     def solve(self):
         try:
@@ -370,6 +388,15 @@ class MappingEditorInterface(altmaya.StandardMayaWindow):
         except ValueError as e:
             self.report_error(str(e))
             
+    def bake(self):
+        s = int(altmaya.Timeline.get_start())
+        e = int(altmaya.Timeline.get_end())
+        for i in range(s, e + 1):
+            s_pose = self.mapper.source.pose_at_frame(i)
+            t_pose = self.mapper.apply(s_pose)
+            self.mapper.target.set_pose_at_frame(i, t_pose)
+        self.report_message("Baked mapper")
+        
     def closeEvent(self, event):
         self.input_selector.close()
         self.output_selector.close()
@@ -393,6 +420,7 @@ class MappingCollectionInterface(altmaya.StandardMayaWindow):
 
         self.mappers = {}
         self.active_callbacks = {}
+        self.timeline_callback = None
 
         self.setGeometry(0, 0, 400, 400)
         self.create_widgets()
@@ -418,8 +446,10 @@ class MappingCollectionInterface(altmaya.StandardMayaWindow):
         self.button_new_mapping = QtWidgets.QPushButton("New")
 
         # Bottom buttons
+        self.button_zero = QtWidgets.QPushButton("Zero")
         self.button_solve_mappings = QtWidgets.QPushButton("Solve")
         self.button_apply_mappings = QtWidgets.QPushButton("Apply")
+        self.button_activate_timeline = QtWidgets.QPushButton("Go Go")
         self.button_bake_mappings = QtWidgets.QPushButton("Bake")
 
     def create_layout(self):
@@ -438,8 +468,10 @@ class MappingCollectionInterface(altmaya.StandardMayaWindow):
         
         # Bottom buttons
         layout_bot_buttons = QtWidgets.QHBoxLayout()
+        layout_bot_buttons.addWidget(self.button_zero)
         layout_bot_buttons.addWidget(self.button_solve_mappings)
         layout_bot_buttons.addWidget(self.button_apply_mappings)
+        layout_bot_buttons.addWidget(self.button_activate_timeline)
         layout_bot_buttons.addWidget(self.button_bake_mappings)
 
         # Main
@@ -450,13 +482,15 @@ class MappingCollectionInterface(altmaya.StandardMayaWindow):
         main_layout.addLayout(layout_bot_buttons)
         
     def create_connections(self):
-        self.button_export_mapping_data.clicked.connect(self.export_to_json)
-        self.button_import_mapping_data.clicked.connect(self.import_from_json)
+        self.button_export_mapping_data.clicked.connect(self.export_to_json_prompt)
+        self.button_import_mapping_data.clicked.connect(self.import_from_json_prompt)
         
         self.button_new_mapping.clicked.connect(self.add_new_mapping)
         
+        self.button_zero.clicked.connect(self.reset_targets_to_zero)
         self.button_solve_mappings.clicked.connect(self.solve_mappings)
         self.button_apply_mappings.clicked.connect(self.apply_mappings)
+        self.button_activate_timeline.clicked.connect(self.toggle_timeline_callback)
         self.button_bake_mappings.clicked.connect(self.bake_mappings)
         
     def set_status(self, message, color_as_hex):
@@ -476,7 +510,7 @@ class MappingCollectionInterface(altmaya.StandardMayaWindow):
         self.set_status(message, "446644")
         altmaya.Report.message("Mapping Manager: " + message)
         
-    def export_to_json(self):
+    def export_to_json_prompt(self):
         filepath = altmaya.Ask.choose_file_to_save_json(self, "Export Mappers to JSON")
         if filepath == "":
             self.report_warning("Cancelled command to export mappers")
@@ -500,12 +534,7 @@ class MappingCollectionInterface(altmaya.StandardMayaWindow):
             
         self.report_message("Exported mappers to %s" % filepath)
         
-    def import_from_json(self):
-        filepath = altmaya.Ask.choose_file_to_open_json(self, "Import Mappers from JSON")
-        if filepath == "":
-            self.report_warning("Cancelled command to import mappers")
-            return 
-            
+    def import_from_json_filepath(self, filepath):
         with open(filepath, "r") as f:
             data = json.loads(f.read())
             
@@ -519,11 +548,32 @@ class MappingCollectionInterface(altmaya.StandardMayaWindow):
             
         self.report_message("Imported mappers from %s" % filepath)
         self.update_table()
+        
+    def import_from_json_prompt(self):
+        filepath = altmaya.Ask.choose_file_to_open_json(self, "Import Mappers from JSON")
+        if filepath == "":
+            self.report_warning("Cancelled command to import mappers")
+            return 
+        else:
+            self.import_from_json_filepath(filepath)
+            
+        
 
     def read_sigma(self, ix):
         slider = self.table_mappers.cellWidget(ix, self.mapper_table_column_names.index("Sigma"))
         return slider.value()
-    
+        
+    def read_is_checked(self, ix):
+        check = self.table_mappers.cellWidget(ix, self.mapper_table_column_names.index("Active"))
+        return check.checkState() == QtCore.Qt.CheckState.Checked
+        
+    def read_is_checked_by_name(self, queried_name):
+        for r in range(self.table_mappers.rowCount()):
+            name = self.table_mappers.item(r, 0).text()
+            if name == queried_name:
+                return self.read_is_checked(r)
+        raise ValueError("%s is not found in table?" % queried_name)
+        return
         
     def update_table(self):
         # Columns are:
@@ -566,7 +616,7 @@ class MappingCollectionInterface(altmaya.StandardMayaWindow):
             # Edit
             def callback(ix, key):
                 def fn():
-                    MappingEditorInterface(self, self.mappers[key]).show()
+                    MappingEditorInterface(self, self.mappers[key], key).show()
                 return fn
             add_button("Edit", callback(ix, key), ix, "Edit")
                         
@@ -598,6 +648,7 @@ class MappingCollectionInterface(altmaya.StandardMayaWindow):
 
             # Active
             def callback(ix, key):
+                
                 mapper = self.mappers[key]
                 
                 def make_attr_callback(mapper):
@@ -606,18 +657,18 @@ class MappingCollectionInterface(altmaya.StandardMayaWindow):
                     return fn
                         
                 def fn(checked):
-                    
-                    if checked:
-                        print("Adding callbacks")
-                        for ai in mapper.source.attribute_indices:
-                            if not altmaya.AttributeChangeCallback.is_already_registered(ai):
-                                attr_callback = make_attr_callback(mapper)
-                                altmaya.AttributeChangeCallback(ai,attr_callback)
-                    else:
-                        print("Stopping callbacks")
-                        for ai in mapper.source.attribute_indices:
-                            if altmaya.AttributeChangeCallback.is_already_registered(ai):
-                                altmaya.AttributeChangeCallback.kill_for_index(ai)
+                    self.report_warning("Call back turned off")
+                    # if checked:
+                    #     print("Adding callbacks")
+                    #     for ai in mapper.source.attribute_indices:
+                    #         if not altmaya.AttributeChangeCallback.is_already_registered(ai):
+                    #             attr_callback = make_attr_callback(mapper)
+                    #             altmaya.AttributeChangeCallback(ai,attr_callback)
+                    # else:
+                    #     print("Stopping callbacks")
+                    #     for ai in mapper.source.attribute_indices:
+                    #         if altmaya.AttributeChangeCallback.is_already_registered(ai):
+                    #             altmaya.AttributeChangeCallback.kill_for_index(ai)
                 return fn
             add_tick_box(callback(ix, key), ix, "Active")
             
@@ -641,6 +692,13 @@ class MappingCollectionInterface(altmaya.StandardMayaWindow):
         else:
             self.report_warning("Cancelled command to make a new mapping (user cancelled)")
             
+    def reset_targets_to_zero(self):
+        keys = self.mappers.keys()
+        for key in keys:
+            mapper = self.mappers[key]
+            mapper.target.go_to_zero()
+        self.report_message("Reset targets to zero")
+            
     def solve_mappings(self):
         c_name = self.mapper_table_column_names.index("Name")
         c_sigma = self.mapper_table_column_names.index("Sigma")
@@ -654,32 +712,71 @@ class MappingCollectionInterface(altmaya.StandardMayaWindow):
                 mapper.sigma = sigma
                 mapper.solve()
             except ValueError as e:
-                self.report_error("Failed to solve %s" % (name, str(e)))
+                self.report_error("Failed to solve %s: %s" % (name, str(e)))
                 return
         self.report_message("Solved %d mappings" % n)
 
     def apply_mappings(self):
         c_name = self.mapper_table_column_names.index("Name")        
         n = self.table_mappers.rowCount()
+        n_applied = 0
         for r in range(n):
             name = self.table_mappers.item(r, c_name).text()
-            mapper = self.mappers[name]
-            try:
-                mapper.apply_current()
-            except ValueError as e:
-                self.report_error("Failed to apply %s" % (name, str(e)))
-                return
-        self.report_message("Applied %d mappings" % n)
+            if self.read_is_checked_by_name(name):
+                mapper = self.mappers[name]
+                if mapper.is_ready_to_run():
+                    try:
+                        mapper.apply_current()
+                        n_applied += 1
+                    except ValueError as e:
+                        self.report_error("Failed to apply %s: %s" % (name, str(e)))
+                        return
+        
+        self.report_message("Applied %d mappings" % (n_applied))
 
+    def toggle_timeline_callback(self):
+        def callback(_):
+            self.apply_mappings()
+                                                        
+        if self.timeline_callback is None:
+            self.report_message("Turning on timeline callback")
+            self.timeline_callback = altmaya.TimelineChangeCallback(callback)
+        else:
+            self.report_message("Turning off timeline callback")
+            self.timeline_callback.kill()
+            self.timeline_callback = None
+        
     def bake_mappings(self):
-        # TODO: implement this
-        self.report_error("Bake not implemented yet sorry!")
+        c_name = self.mapper_table_column_names.index("Name")
+        s = int(altmaya.Timeline.get_start())
+        e = int(altmaya.Timeline.get_end())
+        
+        n = self.table_mappers.rowCount()
+        n_applied = 0
+        for r in range(n):
+            name = self.table_mappers.item(r, c_name).text()
+            if self.read_is_checked_by_name(name):
+                mapper = self.mappers[name]
+                for i in range(s, e + 1):
+                    s_pose = mapper.source.pose_at_frame(i)
+                    t_pose = mapper.apply(s_pose)
+                    mapper.target.set_pose_at_frame(i, t_pose)
+                self.report_message("Baked " + name)
         
     def closeEvent(self, event):
         altmaya.AttributeChangeCallback.clear()
         for c in test_dialog.children():
             if type(c) == MappingEditorInterface:
                 c.close()
+        
+        # Turn off all callbacks
+        if self.timeline_callback is not None:
+            self.timeline_callback.kill()
+        for key in self.mappers.keys():
+            mapper = self.mappers[key]
+            for ai in mapper.source.attribute_indices:
+                if altmaya.AttributeChangeCallback.is_already_registered(ai):
+                    altmaya.AttributeChangeCallback.kill_for_index(ai)
         self.report_message("Enjoy your mapping!")
         event.accept()
 
@@ -691,6 +788,9 @@ except:
     pass
 
 test_dialog = MappingCollectionInterface()
+test_dialog.import_from_json_filepath("F:/_CEDEC2019/OpenFace to CEDEC mapping warren 2.json")
+test_dialog.solve_mappings()
+# test_dialog.apply_mappings()
+# test_dialog.toggle_timeline_callback()
 test_dialog.show()
-
 

@@ -45,13 +45,25 @@ class PoseTracker:
 
     def __init__(self, attribute_indices):
         self.attribute_indices = attribute_indices
-
+    
+    def pose_at_frame(self, frame):
+        return [ai.read_at_time(frame) for ai in self.attribute_indices]
+        
     def current_pose(self):
         return [ai.read() for ai in self.attribute_indices]
-
+    
+    def set_pose_at_frame(self, frame, values):
+        for (index, value) in zip(self.attribute_indices, values):
+            index.set_at_time(frame, value)
+    
     def set_current_pose(self, values):
         for (index, value) in zip(self.attribute_indices, values):
             index.set(value)
+            
+    def go_to_zero(self):
+        for index in self.attribute_indices:
+            index.set(0)
+            
 
 class CrossMapping:
 
@@ -71,11 +83,18 @@ class CrossMapping:
     def is_initialized(self):
         return self.source is not None and self.target is not None
         
+    def is_ready_to_run(self):
+        return self.is_initialized() and len(self.snapshots.keys()) >= 2 and self.interpolator is not None
+        
     def new_snapshot(self, name):
         self.snapshots[name] = {
             "source": self.source.current_pose(),
             "target": self.target.current_pose()
         }
+        
+    def go_to_snapshot(self, name):
+        self.source.set_current_pose(self.snapshots[name]["source"])
+        self.target.set_current_pose(self.snapshots[name]["target"])
         
     def delete_snapshot(self, name):
         del self.snapshots[name]
