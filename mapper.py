@@ -76,9 +76,11 @@ class CrossMapping:
         
     def init_source(self, attrs):
         self.source = PoseTracker(attrs)
+        self.snapshots = {}
         
     def init_target(self, attrs):
         self.target = PoseTracker(attrs)
+        self.snapshots = {}
         
     def is_initialized(self):
         return self.source is not None and self.target is not None
