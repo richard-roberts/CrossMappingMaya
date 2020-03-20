@@ -1,3 +1,5 @@
+import json
+
 import numpy
 
 
@@ -6,7 +8,7 @@ class Kernels:
     @staticmethod
     def gaussian(a, b, sigma): 
         dist = numpy.linalg.norm(b - a)
-        numer = -dist ** 2
+        numer = -(dist) ** 2
         denom = 2 * (sigma ** 2)
         return numpy.exp(numer / denom)
 
@@ -37,7 +39,7 @@ class ScatteredDataInterpolation:
             self.kernel(current_source_pose, s, self.sigma)
             for s in self.source
         ]
-        result = numpy.array(values) * self.weights
+        result = numpy.matrix(values) * self.weights
         return result.tolist()[0]
 
 
@@ -73,6 +75,18 @@ class CrossMapping:
         self.sigma = 1.0
         self.interpolator = None
         self.snapshots = {}
+
+    def configure_from_json(self, filepath, index):
+        with open(filepath, "r") as f:
+            data = json.loads(f.read())[index]
+        
+        # Params
+        self.sigma = data["sigma"]
+
+        # Load in snapshots
+        self.snapshots = {}
+        for key in data["snapshots"].keys():
+            self.snapshots[key] = data["snapshots"][key]
         
     def init_source(self, attrs):
         self.source = PoseTracker(attrs)
@@ -86,7 +100,7 @@ class CrossMapping:
         return self.source is not None and self.target is not None
         
     def is_ready_to_run(self):
-        return self.is_initialized() and len(self.snapshots.keys()) >= 2 and self.interpolator is not None
+        return self.is_initialized() and len(self.snapshots.keys()) >= 1 and self.interpolator is not None
         
     def new_snapshot(self, name):
         self.snapshots[name] = {
@@ -107,8 +121,29 @@ class CrossMapping:
     def number_of_snapshots(self):
         return len(self.snapshots.keys())
 
-    def solve(self):
-        if not self.is_initialized():
+    def get_snapshot_distance_matrices(self):
+        keys = self.snapshots.keys()
+        source = []
+        target = []
+        for key_a in keys:
+            a_s = numpy.array(self.snapshots[key_a]["source"])
+            a_t = numpy.array(self.snapshots[key_a]["target"])
+            s_row = []
+            t_row = []
+            for key_b in keys:
+                b_s = numpy.array(self.snapshots[key_b]["source"])
+                b_t = numpy.array(self.snapshots[key_b]["target"])
+                d_s = numpy.linalg.norm(b_s - a_s)
+                d_t = numpy.linalg.norm(b_t - a_t)
+                s_row.append(d_s)
+                t_row.append(d_t)
+            source.append(s_row)
+            target.append(t_row)
+        return keys, source, target
+
+
+    def solve(self, check_initialized=True):
+        if check_initialized and not self.is_initialized():
             raise ValueError("Source and target pose trackers not yet initialized")
         
         # Stack poses for each snapshot, ensuring to put them in the same order
@@ -136,6 +171,7 @@ class CrossMapping:
             raise ValueError("Interpolator has not been setup")
         else:
             values = self.apply(self.source.current_pose())
+            print("THE VALUES ARE ", str(["%2.2f" % v for v in values]))
             self.target.set_current_pose(values)
 
     def try_apply_current(self):
