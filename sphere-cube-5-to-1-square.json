@@ -1,0 +1,66 @@
+[
+    {
+        "target_indices": [
+            "pCube1.tx",
+            "pCube1.ty",
+            "pCube1.tz"
+        ],
+        "sigma": 5.0,
+        "name": "Sphere-Cube",
+        "snapshots": {
+            "@23": {
+                "source": [
+                    -5.0,
+                    5.0,
+                    0.0
+                ],
+                "target": [
+                    0.0,
+                    -1.0,
+                    0.9999999999999998
+                ]
+            },
+            "@45": {
+                "source": [
+                    5.0,
+                    5.0,
+                    0.0
+                ],
+                "target": [
+                    0.0,
+                    0.9999999999999996,
+                    1.0
+                ]
+            },
+            "@1": {
+                "source": [
+                    -5.0,
+                    -5.0,
+                    0.0
+                ],
+                "target": [
+                    0.0,
+                    -1.0,
+                    -1.0
+                ]
+            },
+            "@68": {
+                "source": [
+                    5.0,
+                    -5.0,
+                    0.0
+                ],
+                "target": [
+                    0.0,
+                    1.0,
+                    -1.0
+                ]
+            }
+        },
+        "source_indices": [
+            "pSphere1.tx",
+            "pSphere1.ty",
+            "pSphere1.tz"
+        ]
+    }
+]
