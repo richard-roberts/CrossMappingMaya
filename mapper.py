@@ -3,43 +3,35 @@ import json
 import numpy
 
 
-class Kernels:
-    
-    @staticmethod
-    def gaussian(a, b, sigma): 
-        dist = numpy.linalg.norm(b - a)
-        numer = -(dist) ** 2
-        denom = 2 * (sigma ** 2)
-        return numpy.exp(numer / denom)
-
-
 class ScatteredDataInterpolation:
 
-    def __init__(self, source, target, kernel, sigma):
+    def __init__(self, source, target, sigma):
         self.source = [numpy.array(v) for v in source]
         self.target = [numpy.array(v) for v in target]
-        self.kernel = kernel
         self.sigma = sigma
 
-        # Build matrix containing kernel applied to combinations of values
         n = len(self.source)
         A = numpy.matrix(numpy.zeros((n, n)))
         for (i, pose_i) in enumerate(self.source):
             for (j, pose_j) in enumerate(self.source):
-                A[i, j] = kernel(pose_i, pose_j, sigma)
+                dist = numpy.linalg.norm(pose_i - pose_j)
+                A[i, j] = self.kernel(dist)
         
-        # Build matrix containing target values
         b = numpy.vstack(self.target)
-
-        # Solve for weights
         self.weights = (A.T * A).I * A.T * b
 
-    def interpolate(self, current_source_pose):
-        values = [
-            self.kernel(current_source_pose, s, self.sigma)
-            for s in self.source
-        ]
-        result = numpy.matrix(values) * self.weights
+    def kernel(self, dist):
+        numer = -numpy.power(dist, 2)
+        denom = 2 * numpy.power(self.sigma, 2)
+        return numpy.exp(numer / denom)
+
+    def interpolate(self, pose):
+        vs = []
+        for s in self.source:
+            dist = numpy.linalg.norm(pose - s)
+            vs.append(self.kernel(dist))
+
+        result = numpy.matrix(vs) * self.weights
         return result.tolist()[0]
 
 
@@ -121,6 +113,15 @@ class CrossMapping:
     def number_of_snapshots(self):
         return len(self.snapshots.keys())
 
+    def keyframes_of_snapshots(self):
+        keyframes = []
+        names = self.names_of_snapshots()
+        for name in names:
+            if name.startswith("@"):
+                f = int(name.split("@")[1])
+                keyframes.append(f)
+        return keyframes
+
     def get_snapshot_distance_matrices(self):
         keys = self.snapshots.keys()
         source = []
@@ -156,7 +157,6 @@ class CrossMapping:
         self.interpolator = ScatteredDataInterpolation(
             source_data,
             target_data,
-            Kernels.gaussian,
             self.sigma
         )
 

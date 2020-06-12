@@ -548,6 +548,7 @@ class MappingCollectionInterface(altmaya.StandardMayaWindow):
         self.button_solve_mappings = QtWidgets.QPushButton("Solve")
         self.button_apply_mappings = QtWidgets.QPushButton("Apply")
         self.button_activate_timeline = QtWidgets.QPushButton("Go Go")
+        self.button_key_snapshots = QtWidgets.QPushButton("Key Snapshots")
         self.button_bake_mappings = QtWidgets.QPushButton("Bake")
         self.button_clear_animation = QtWidgets.QPushButton("Clear Anim")
 
@@ -572,6 +573,7 @@ class MappingCollectionInterface(altmaya.StandardMayaWindow):
         layout_bot_buttons.addWidget(self.button_solve_mappings)
         layout_bot_buttons.addWidget(self.button_apply_mappings)
         layout_bot_buttons.addWidget(self.button_activate_timeline)
+        layout_bot_buttons.addWidget(self.button_key_snapshots)
         layout_bot_buttons.addWidget(self.button_bake_mappings)
         layout_bot_buttons.addWidget(self.button_clear_animation)
         
@@ -593,6 +595,7 @@ class MappingCollectionInterface(altmaya.StandardMayaWindow):
         self.button_solve_mappings.clicked.connect(self.solve_mappings)
         self.button_apply_mappings.clicked.connect(self.apply_mappings)
         self.button_activate_timeline.clicked.connect(self.toggle_timeline_callback)
+        self.button_key_snapshots.clicked.connect(self.keyframe_snapshots)
         self.button_bake_mappings.clicked.connect(self.bake_mappings)
         self.button_clear_animation.clicked.connect(self.clear_animation)
         
@@ -915,6 +918,36 @@ class MappingCollectionInterface(altmaya.StandardMayaWindow):
                     altmaya.Animation.add_keyframes(attr, times, values)
         
         self.report_message("Baked %d mappers" % n_applied)
+
+    def keyframe_snapshots(self):
+        self.solve_mappings()
+        
+        c_name = self.mapper_table_column_names.index("Name")
+        
+        self.report_message("Keying snapshots:")
+        
+        n_mappers = self.table_mappers.rowCount()
+        n_applied = 0
+        for r in range(n_mappers):
+            name = self.table_mappers.item(r, c_name).text()
+            
+            self.report_message("    ... keying snapshots in mapper %s" % name)
+            if self.read_is_checked_by_name(name):
+                n_applied += 1 
+                mapper = self.mappers[name]
+                keyframes = mapper.keyframes_of_snapshots()
+                attrs = mapper.target.attribute_indices
+                
+                
+                for (i, k) in enumerate(keyframes):
+                    self.report_message("        ... keying for frame %d" % k)
+                    s_pose = mapper.source.pose_at_frame(k)
+                    t_pose = mapper.apply(s_pose)
+                    for (attr, value) in zip(attrs, t_pose):
+                        self.report_message("            ... set attr %s to %2.2f" % (attr.key, value))
+                        attr.set_at_time(k, value)
+        
+        self.report_message("Keyed snapshots for %d mappers" % n_applied)
     
     def clear_animation(self):        
         c_name = self.mapper_table_column_names.index("Name")

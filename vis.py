@@ -1,3 +1,4 @@
+import sys
 import json
 
 import numpy
@@ -8,17 +9,18 @@ import mpl_toolkits.mplot3d
 
 import mapper
 
-CMAP_SOURCE_KEY = "Reds_r"
+CMAP_SOURCE_KEY = "Reds"
 CMAP_SOURCE_NORM = matplotlib.colors.Normalize(vmin=0.0,vmax=15.0)
-CMAP_TARGET_KEY = "Blues_r"
-CMAP_TARGET_NORM = matplotlib.colors.Normalize(vmin=0.0,vmax=3.0) 
+CMAP_TARGET_KEY = "Blues"
+CMAP_TARGET_NORM = matplotlib.colors.Normalize(vmin=0.0,vmax=15.0) 
+
 class Vis:
 
 	def __init__(self, filepath):
 		self.current_frame = 1
 		self.cm = mapper.CrossMapping()
 		self.cm.configure_from_json(filepath, 0)
-		with open(filepath.replace(".json", "-baking.json"), "r") as f:
+		with open(filepath.replace(".json", "-baked.json"), "r") as f:
 			data = json.loads(f.read())
 			self.source_anim = data["anim"]
 		self.update_target_anim()
@@ -95,6 +97,30 @@ class Vis:
 				"%2.2f" % dists[i],
 				ha="center", va="center"#, c"olor="w
 			)
+
+	def plot_snapshot_distance_anim(self, ax, anim, snapshot_key, cmap, norm, tick_spacing=20):
+		frames = list(range(1, len(anim) + 1))
+		names = list(self.cm.snapshots.keys())
+
+		dists = []
+		for f in frames:
+			row = []
+			ix = f - 1
+			c = numpy.array(anim[ix])
+			for name in names:
+				s = numpy.array(self.cm.snapshots[name][snapshot_key])
+				d = numpy.linalg.norm(c - s)
+				row.append(d)
+			row.append(sum(row))
+			dists.append(row)
+
+		dists = numpy.array(dists)
+		ax.set_title(snapshot_key)
+		ax.matshow(dists.T, aspect='auto', cmap=cmap, norm=norm)
+		ax.set_yticks(numpy.arange(len(names) + 1))
+		ax.set_xticks([f for f in frames if f % tick_spacing == 0])
+		ax.set_yticklabels(names + ["sum"])
+		ax.set_xticklabels([str(f) for f in frames if f % tick_spacing == 0])
 
 	def setup_pose_marker(self, ax, anim):
 		ix = int(self.current_frame) - 1
@@ -180,35 +206,12 @@ class Vis:
 		self.setup_frame_slider()
 		self.setup_sigma_slider(self.redraw)
 
-	def plot_snapshot_distance_anim(self, ax, anim, snapshot_key, cmap, norm):
-		frames = list(range(1, len(anim) + 1))
-		names = list(self.cm.snapshots.keys())
-
-		dists = []
-		for f in frames:
-			row = []
-			ix = f - 1
-			c = numpy.array(anim[ix])
-			for name in names:
-				s = numpy.array(self.cm.snapshots[name][snapshot_key])
-				d = numpy.linalg.norm(c - s)
-				row.append(d)
-			row.append(min(row))
-			dists.append(row)
-
-		dists = numpy.array(dists)
-		ax.set_title(snapshot_key)
-		ax.matshow(dists.T, aspect='auto', cmap=cmap, norm=norm)
-		ax.set_yticks(numpy.arange(len(names) + 1))
-		ax.set_xticks([f for f in frames if f % 5 == 0])
-		ax.set_yticklabels(names + ["min"])
-		ax.set_xticklabels([str(f) for f in frames if f % 5 == 0])
-	
 	def show(self):
 		matplotlib.pyplot.show()
 
 if __name__ == "__main__":
-	v = Vis("sphere-cube-5-to-1-square.json")
-	# v = Vis("sphere-cube-5-to-1-square-missing.json")
+	# filepath = "/Users/richardroberts/Development/Maya Projects/CMM/data/XZ-plane-test.json"
+	filepath = sys.argv[1]
+	v = Vis(filepath)
 	v.render_interface()
 	v.show()
